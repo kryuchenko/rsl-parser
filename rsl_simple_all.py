@@ -98,7 +98,7 @@ async def save_book_description(page, output_dir):
         print(f"   ❌ Ошибка сохранения описания: {e}")
         return None
 
-async def extract_book_images(book_id, max_pages=50, headless=True):
+async def extract_book_images(book_id, max_pages=50, start_page=1, headless=True):
     """Извлекает изображения из background-image стилей"""
     
     # Папка просто по ID книги
@@ -121,8 +121,8 @@ async def extract_book_images(book_id, max_pages=50, headless=True):
         base_url = f"https://viewer.rsl.ru/ru/{book_id}"
         print(f"📖 Открываем книгу: {base_url}")
         
-        # Переходим на первую страницу и сохраняем описание
-        await page.goto(f"{base_url}?page=1", wait_until='networkidle', timeout=20000)
+        # Переходим на стартовую страницу и сохраняем описание
+        await page.goto(f"{base_url}?page={start_page}", wait_until='networkidle', timeout=20000)
         await asyncio.sleep(3)
         
         # Сохраняем описание книги
@@ -186,7 +186,7 @@ async def extract_book_images(book_id, max_pages=50, headless=True):
         
         print(f"\n📥 Извлечение до {max_pages} страниц (остановка при неудачах)...\n")
         
-        for page_num in range(1, max_pages + 1):
+        for page_num in range(start_page, start_page + max_pages):
             print(f"📄 Страница {page_num}...", end=" ")
             
             failed = True  # Флаг неудачи для этой итерации
@@ -270,10 +270,16 @@ def extract_book_id(url):
     match = re.search(r'(rsl\d+)', url)
     return match.group(1) if match else None
 
+def extract_page_number(url):
+    """Извлечь номер страницы из URL"""
+    match = re.search(r'[?&]page=(\d+)', url)
+    return int(match.group(1)) if match else None
+
 async def main():
     parser = argparse.ArgumentParser(description='RSL парсер с умной остановкой')
     parser.add_argument('url', help='URL книги на viewer.rsl.ru')
     parser.add_argument('--pages', type=int, default=20, help='Максимум страниц (по умолчанию 20)')
+    parser.add_argument('--single', type=int, help='Скачать только одну конкретную страницу')
     parser.add_argument('--all', action='store_true', help='Попытаться скачать все страницы')
     parser.add_argument('--show-browser', action='store_true', help='Показать браузер')
     
@@ -284,13 +290,32 @@ async def main():
         print(f"❌ Не удалось извлечь ID книги из URL: {args.url}")
         return
     
-    print(f"📚 ID книги: {book_id}")
+    # Извлекаем номер страницы из URL если есть
+    url_page = extract_page_number(args.url)
     
-    # Определяем количество страниц
-    if args.all:
+    print(f"📚 ID книги: {book_id}")
+    if url_page:
+        print(f"📄 Страница из URL: {url_page}")
+    
+    # Определяем режим работы
+    start_page = 1
+    
+    if args.single:
+        # Режим одной страницы
+        start_page = args.single
+        max_pages = 1
+        print(f"🎯 Режим: скачать только страницу {args.single}")
+    elif url_page and not args.all:
+        # Страница из URL (если не --all)
+        start_page = url_page
+        max_pages = 1
+        print(f"🎯 Режим: скачать только страницу {url_page} из URL")
+    elif args.all:
+        # Режим всех страниц
         max_pages = None  # Сентинел для --all
         print(f"🔄 Режим: скачать ВСЕ страницы (умная остановка при неудачах)")
     else:
+        # Обычный режим с лимитом
         max_pages = args.pages
         print(f"📊 Максимум страниц: {args.pages}")
     
@@ -299,6 +324,7 @@ async def main():
     saved_count, book_info, output_dir = await extract_book_images(
         book_id,
         max_pages=max_pages,
+        start_page=start_page,
         headless=not args.show_browser
     )
     
