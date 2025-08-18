@@ -22,13 +22,15 @@ async def save_book_description(page, output_dir):
     try:
         print("📋 Сохранение описания книги...")
         
-        # Пробуем кликнуть на кнопку информации
-        info_button_xpath = '//*[@id="app"]/div[1]/div[1]/div/ul/li[7]/button'
+        # Пробуем кликнуть на кнопку информации (более устойчивый селектор)
         try:
-            info_button = await page.query_selector(f'xpath={info_button_xpath}')
+            info_button = await page.query_selector('.icon_doc-icon-info')
             if info_button:
-                await info_button.click()
-                await asyncio.sleep(2)
+                # Находим родительскую кнопку
+                button = await info_button.query_selector('..')
+                if button:
+                    await button.click()
+                    await asyncio.sleep(2)
         except:
             pass
         
@@ -169,7 +171,7 @@ async def extract_book_images(book_id, max_pages=50, headless=True):
             if total_pages:
                 print(f"📊 Обнаружено {total_pages} страниц в книге")
                 # Корректируем max_pages 
-                if max_pages == 500:  # Если режим --all
+                if max_pages is None:  # Если режим --all
                     max_pages = total_pages
                     print(f"🎯 Будет скачано все {max_pages} страниц")
                 elif total_pages < max_pages:
@@ -177,6 +179,8 @@ async def extract_book_images(book_id, max_pages=50, headless=True):
                     print(f"📎 Скорректировано до {max_pages} страниц (всего в книге)")
             else:
                 print("⚠️ Не удалось определить количество страниц")
+                if max_pages is None:  # Если --all но не удалось определить страницы
+                    max_pages = 500  # Фоллбэк
         except Exception as e:
             print(f"⚠️ Ошибка при определении страниц: {e}")
         
@@ -185,14 +189,14 @@ async def extract_book_images(book_id, max_pages=50, headless=True):
         for page_num in range(1, max_pages + 1):
             print(f"📄 Страница {page_num}...", end=" ")
             
-            # Переходим на страницу
-            page_url = f"{base_url}?page={page_num}"
-            await page.goto(page_url, wait_until='networkidle', timeout=20000)
-            await asyncio.sleep(2)
-            
-            saved = False
+            failed = True  # Флаг неудачи для этой итерации
             
             try:
+                # Переходим на страницу
+                page_url = f"{base_url}?page={page_num}"
+                await page.goto(page_url, wait_until='networkidle', timeout=20000)
+                await asyncio.sleep(2)
+                
                 # Ищем элементы с background-image
                 background_image_data = await page.evaluate('''
                     () => {
@@ -233,26 +237,22 @@ async def extract_book_images(book_id, max_pages=50, headless=True):
                                     saved_images += 1
                                     size_kb = len(img_data) // 1024
                                     print(f"✅ {size_kb}KB")
-                                    saved = True
+                                    failed = False
                                     consecutive_failures = 0
                                 else:
                                     print("⚠️ дубликат")
-                                    consecutive_failures += 1
                             else:
                                 print(f"⚠️ мало данных")
-                                consecutive_failures += 1
                         except Exception as e:
-                            print(f"❌ ошибка: {e}")
-                            consecutive_failures += 1
+                            print(f"❌ ошибка обработки изображения: {e}")
                 else:
                     print("❌ не найдено")
-                    consecutive_failures += 1
                     
             except Exception as e:
-                print(f"❌ ошибка: {e}")
-                consecutive_failures += 1
+                print(f"❌ ошибка навигации: {e}")
             
-            if not saved:
+            # Инкрементируем счетчик ровно один раз в конце итерации
+            if failed:
                 consecutive_failures += 1
             
             # Если 5 страниц подряд не удалось скачать - прекращаем
@@ -274,7 +274,7 @@ async def main():
     parser = argparse.ArgumentParser(description='RSL парсер с умной остановкой')
     parser.add_argument('url', help='URL книги на viewer.rsl.ru')
     parser.add_argument('--pages', type=int, default=20, help='Максимум страниц (по умолчанию 20)')
-    parser.add_argument('--all', action='store_true', help='Попытаться скачать все страницы (до 500)')
+    parser.add_argument('--all', action='store_true', help='Попытаться скачать все страницы')
     parser.add_argument('--show-browser', action='store_true', help='Показать браузер')
     
     args = parser.parse_args()
@@ -288,7 +288,7 @@ async def main():
     
     # Определяем количество страниц
     if args.all:
-        max_pages = 500  # Большой лимит для режима --all
+        max_pages = None  # Сентинел для --all
         print(f"🔄 Режим: скачать ВСЕ страницы (умная остановка при неудачах)")
     else:
         max_pages = args.pages
